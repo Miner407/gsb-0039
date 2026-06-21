@@ -1,5 +1,14 @@
-const { run, get } = require('./database');
+const { run, get, all, db } = require('./database');
 const bcrypt = require('bcryptjs');
+
+async function columnExists(table, column) {
+  try {
+    const rows = await all(`PRAGMA table_info(${table})`);
+    return rows.some(row => row.name === column);
+  } catch (err) {
+    return false;
+  }
+}
 
 async function initDB() {
   console.log('开始初始化数据库...');
@@ -38,12 +47,19 @@ async function initDB() {
       status TEXT DEFAULT 'pending',
       reviewed_by INTEGER,
       reviewed_at DATETIME,
+      review_comment TEXT,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (user_id) REFERENCES users(id),
       FOREIGN KEY (project_id) REFERENCES projects(id)
     )
   `);
+
+  const hasReviewComment = await columnExists('time_entries', 'review_comment');
+  if (!hasReviewComment) {
+    await run('ALTER TABLE time_entries ADD COLUMN review_comment TEXT');
+    console.log('添加 review_comment 字段');
+  }
 
   await run(`
     CREATE INDEX IF NOT EXISTS idx_time_entries_user_date ON time_entries(user_id, date);
@@ -97,8 +113,12 @@ async function initDB() {
   console.log('数据库初始化完成!');
 }
 
-initDB().catch(err => {
-  console.error('初始化失败:', err);
-  process.exit(1);
-});
+module.exports = { initDB };
+
+if (require.main === module) {
+  initDB().catch(err => {
+    console.error('初始化失败:', err);
+    process.exit(1);
+  });
+}
 

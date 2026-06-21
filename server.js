@@ -8,6 +8,7 @@ const projectsRouter = require('./routes/projects');
 const timesheetsRouter = require('./routes/timesheets');
 const statsRouter = require('./routes/stats');
 const usersRouter = require('./routes/users');
+const { initDB } = require('./db/init');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -15,9 +16,11 @@ const PORT = process.env.PORT || 3001;
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+const sessionDbName = process.env.SESSION_DB_NAME || 'sessions.db';
+
 app.use(session({
   store: new SQLiteStore({
-    db: 'sessions.db',
+    db: sessionDbName,
     dir: path.join(__dirname, 'data')
   }),
   secret: 'timesheet-secret-key-2024',
@@ -40,6 +43,11 @@ app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-app.listen(PORT, () => {
-  console.log(`服务器运行在 http://localhost:${PORT}`);
-});
+async function startServer() {
+  await initDB();
+  app.listen(PORT, () => {
+    console.log(`服务器运行在 http://localhost:${PORT}`);
+  });
+}
+
+startServer();

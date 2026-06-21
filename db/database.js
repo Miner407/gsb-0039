@@ -1,7 +1,14 @@
 const sqlite3 = require('sqlite3').verbose();
 const path = require('path');
+const fs = require('fs');
 
-const dbPath = path.join(__dirname, '..', 'data', 'timesheet.db');
+const dbName = process.env.DB_NAME || 'timesheet.db';
+const dataDir = path.join(__dirname, '..', 'data');
+const dbPath = path.join(dataDir, dbName);
+
+if (!fs.existsSync(dataDir)) {
+  fs.mkdirSync(dataDir, { recursive: true });
+}
 
 const db = new sqlite3.Database(dbPath, (err) => {
   if (err) {

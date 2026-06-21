@@ -5,6 +5,7 @@ let currentPage = 'login';
 let projects = [];
 let timesheets = [];
 let users = [];
+let batchEntries = [];
 
 const app = document.getElementById('app');
 
@@ -12,7 +13,8 @@ async function apiRequest(url, options = {}) {
   const defaultOptions = {
     headers: {
       'Content-Type': 'application/json'
-    }
+    },
+    credentials: 'same-origin'
   };
   
   const response = await fetch(API_BASE + url, {
@@ -20,6 +22,10 @@ async function apiRequest(url, options = {}) {
     ...options,
     body: options.body ? JSON.stringify(options.body) : undefined
   });
+
+  if (response.headers.get('content-type')?.includes('text/csv')) {
+    return response;
+  }
 
   const data = await response.json();
   
@@ -133,6 +139,9 @@ function renderLayout(content, activePage) {
       <a data-page="timesheet-review" class="${activePage === 'timesheet-review' ? 'active' : ''}">工时审核</a>
       <a data-page="stats-project" class="${activePage === 'stats-project' ? 'active' : ''}">项目成本统计</a>
       <a data-page="stats-member" class="${activePage === 'stats-member' ? 'active' : ''}">成员工时统计</a>
+      <a data-page="stats-task" class="${activePage === 'stats-task' ? 'active' : ''}">任务类型统计</a>
+      <a data-page="stats-utilization" class="${activePage === 'stats-utilization' ? 'active' : ''}">成员利用率</a>
+      <a data-page="stats-pending" class="${activePage === 'stats-pending' ? 'active' : ''}">未审核列表</a>
       <a data-page="project-manage" class="${activePage === 'project-manage' ? 'active' : ''}">项目管理</a>
       <a data-page="user-manage" class="${activePage === 'user-manage' ? 'active' : ''}">用户管理</a>
     `;
@@ -187,6 +196,9 @@ function getPageTitle(page) {
     'timesheet-review': '工时审核',
     'stats-project': '项目成本统计',
     'stats-member': '成员工时统计',
+    'stats-task': '任务类型统计',
+    'stats-utilization': '成员利用率',
+    'stats-pending': '未审核工时列表',
     'project-manage': '项目管理',
     'user-manage': '用户管理'
   };
@@ -217,6 +229,15 @@ function navigateTo(page) {
       break;
     case 'stats-member':
       renderStatsMember();
+      break;
+    case 'stats-task':
+      renderStatsTask();
+      break;
+    case 'stats-utilization':
+      renderStatsUtilization();
+      break;
+    case 'stats-pending':
+      renderStatsPending();
       break;
     case 'project-manage':
       renderProjectManage();
@@ -255,7 +276,11 @@ async function renderTimesheet() {
       <div class="card">
         <div class="section-title">
           <h3>今日工时 (${today})</h3>
-          <button class="btn btn-primary btn-sm" id="add-entry-btn">+ 添加工时</button>
+          <div style="display: flex; gap: 10px;">
+            <button class="btn btn-primary btn-sm" id="add-entry-btn">+ 添加工时</button>
+            <button class="btn btn-secondary btn-sm" id="batch-entry-btn">+ 批量填报</button>
+            <button class="btn btn-secondary btn-sm" id="copy-entry-btn">复制某日工时</button>
+          </div>
         </div>
         
         <div style="margin-bottom: 20px;">
@@ -284,11 +309,12 @@ async function renderTimesheet() {
               <th>小时数</th>
               <th>备注</th>
               <th>状态</th>
+              <th>审核意见</th>
               <th>操作</th>
             </tr>
           </thead>
           <tbody id="entries-tbody">
-            ${entriesData.entries.length === 0 ? '<tr><td colspan="6" class="empty-state">暂无工时记录</td></tr>' : 
+            ${entriesData.entries.length === 0 ? '<tr><td colspan="7" class="empty-state">暂无工时记录</td></tr>' : 
               entriesData.entries.map(entry => `
                 <tr>
                   <td>${escapeHtml(entry.project_name)}</td>
@@ -296,12 +322,19 @@ async function renderTimesheet() {
                   <td>${entry.hours}h</td>
                   <td>${escapeHtml(entry.remark || '-')}</td>
                   <td><span class="status-badge ${getStatusClass(entry.status)}">${getStatusText(entry.status)}</span></td>
+                  <td>${entry.review_comment ? escapeHtml(entry.review_comment) : '-'}</td>
                   <td>
                     <div class="action-buttons">
-                      ${entry.status !== 'approved' ? `
-                        <button class="btn btn-secondary btn-sm edit-btn" data-id="${entry.id}">编辑</button>
-                        <button class="btn btn-danger btn-sm delete-btn" data-id="${entry.id}">删除</button>
-                      ` : '<span style="color: #999; font-size: 12px;">已锁定</span>'}
+                      ${entry.status === 'approved' ? 
+                        '<span style="color: #999; font-size: 12px;">已锁定</span>' :
+                        entry.status === 'rejected' ? `
+                          <button class="btn btn-warning btn-sm resubmit-btn" data-id="${entry.id}">重新提交</button>
+                          <button class="btn btn-secondary btn-sm edit-btn" data-id="${entry.id}">编辑</button>
+                        ` : `
+                          <button class="btn btn-secondary btn-sm edit-btn" data-id="${entry.id}">编辑</button>
+                          <button class="btn btn-danger btn-sm delete-btn" data-id="${entry.id}">删除</button>
+                        `
+                      }
                     </div>
                   </td>
                 </tr>
@@ -312,12 +345,22 @@ async function renderTimesheet() {
       </div>
       
       <div id="entry-modal"></div>
+      <div id="batch-modal"></div>
+      <div id="copy-modal"></div>
     `;
     
     renderLayout(content, 'timesheet');
     
     document.getElementById('add-entry-btn').addEventListener('click', () => {
       showEntryModal();
+    });
+    
+    document.getElementById('batch-entry-btn').addEventListener('click', () => {
+      showBatchModal();
+    });
+    
+    document.getElementById('copy-entry-btn').addEventListener('click', () => {
+      showCopyModal();
     });
     
     document.getElementById('filter-date').addEventListener('change', async (e) => {
@@ -333,7 +376,7 @@ async function renderTimesheet() {
       
       const tbody = document.getElementById('entries-tbody');
       tbody.innerHTML = entriesData.entries.length === 0 ? 
-        '<tr><td colspan="6" class="empty-state">暂无工时记录</td></tr>' : 
+        '<tr><td colspan="7" class="empty-state">暂无工时记录</td></tr>' : 
         entriesData.entries.map(entry => `
           <tr>
             <td>${escapeHtml(entry.project_name)}</td>
@@ -341,12 +384,19 @@ async function renderTimesheet() {
             <td>${entry.hours}h</td>
             <td>${escapeHtml(entry.remark || '-')}</td>
             <td><span class="status-badge ${getStatusClass(entry.status)}">${getStatusText(entry.status)}</span></td>
+            <td>${entry.review_comment ? escapeHtml(entry.review_comment) : '-'}</td>
             <td>
               <div class="action-buttons">
-                ${entry.status !== 'approved' ? `
-                  <button class="btn btn-secondary btn-sm edit-btn" data-id="${entry.id}">编辑</button>
-                  <button class="btn btn-danger btn-sm delete-btn" data-id="${entry.id}">删除</button>
-                ` : '<span style="color: #999; font-size: 12px;">已锁定</span>'}
+                ${entry.status === 'approved' ? 
+                  '<span style="color: #999; font-size: 12px;">已锁定</span>' :
+                  entry.status === 'rejected' ? `
+                    <button class="btn btn-warning btn-sm resubmit-btn" data-id="${entry.id}">重新提交</button>
+                    <button class="btn btn-secondary btn-sm edit-btn" data-id="${entry.id}">编辑</button>
+                  ` : `
+                    <button class="btn btn-secondary btn-sm edit-btn" data-id="${entry.id}">编辑</button>
+                    <button class="btn btn-danger btn-sm delete-btn" data-id="${entry.id}">删除</button>
+                  `
+                }
               </div>
             </td>
           </tr>
@@ -379,6 +429,21 @@ function bindEntryActions() {
           const id = btn.dataset.id;
           await apiRequest(`/timesheets/${id}`, { method: 'DELETE' });
           showToast('删除成功', 'success');
+          renderTimesheet();
+        } catch (err) {
+          showToast(err.message, 'error');
+        }
+      }
+    });
+  });
+
+  document.querySelectorAll('.resubmit-btn').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      if (confirm('确定要重新提交这条工时记录吗？')) {
+        try {
+          const id = btn.dataset.id;
+          await apiRequest(`/timesheets/${id}/resubmit`, { method: 'POST' });
+          showToast('重新提交成功', 'success');
           renderTimesheet();
         } catch (err) {
           showToast(err.message, 'error');
@@ -469,6 +534,196 @@ function showEntryModal(entry = null) {
       renderTimesheet();
     } catch (err) {
       document.getElementById('modal-error').innerHTML = `<div class="alert alert-error">${err.message}</div>`;
+    }
+  });
+}
+
+function showBatchModal() {
+  const today = document.getElementById('filter-date')?.value || new Date().toISOString().split('T')[0];
+  batchEntries = [];
+  
+  const modal = document.getElementById('batch-modal');
+  modal.innerHTML = `
+    <div class="modal-overlay" id="batch-modal-overlay">
+      <div class="modal" style="width: 700px;">
+        <h3>批量填报工时</h3>
+        <div id="batch-modal-error"></div>
+        <div class="form-group">
+          <label>日期 *</label>
+          <input type="date" id="batch-date" value="${today}" required>
+        </div>
+        <div style="margin-bottom: 15px;">
+          <button type="button" class="btn btn-secondary btn-sm" id="add-batch-line">+ 添加一行</button>
+          <span style="margin-left: 10px; color: #666; font-size: 12px;">当前共 <span id="batch-count">0</span> 条，合计 <span id="batch-total">0</span> 小时</span>
+        </div>
+        <table style="margin-bottom: 20px;">
+          <thead>
+            <tr>
+              <th>项目 *</th>
+              <th>任务 *</th>
+              <th>小时数 *</th>
+              <th>备注</th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody id="batch-tbody">
+          </tbody>
+        </table>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-secondary" id="batch-cancel">取消</button>
+          <button type="button" class="btn btn-primary" id="batch-submit">提交全部</button>
+        </div>
+      </div>
+    </div>
+  `;
+  
+  function addBatchLine() {
+    const tbody = document.getElementById('batch-tbody');
+    const idx = tbody.children.length;
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>
+        <select class="batch-project" required>
+          <option value="">请选择</option>
+          ${projects.map(p => `<option value="${p.id}">${escapeHtml(p.name)}</option>`).join('')}
+        </select>
+      </td>
+      <td><input type="text" class="batch-task" placeholder="任务名称" required></td>
+      <td><input type="number" class="batch-hours" step="0.5" min="0.5" max="12" placeholder="小时数" style="width: 100px;" required></td>
+      <td><input type="text" class="batch-remark" placeholder="备注（选填）"></td>
+      <td><button type="button" class="btn btn-danger btn-sm batch-remove">删除</button></td>
+    `;
+    tbody.appendChild(tr);
+    
+    tr.querySelector('.batch-remove').addEventListener('click', () => {
+      tr.remove();
+      updateBatchSummary();
+    });
+    
+    tr.querySelectorAll('input, select').forEach(el => {
+      el.addEventListener('change', updateBatchSummary);
+      el.addEventListener('input', updateBatchSummary);
+    });
+    
+    updateBatchSummary();
+  }
+  
+  function updateBatchSummary() {
+    const trs = document.querySelectorAll('#batch-tbody tr');
+    let total = 0;
+    trs.forEach(tr => {
+      const h = parseFloat(tr.querySelector('.batch-hours').value) || 0;
+      total += h;
+    });
+    document.getElementById('batch-count').textContent = trs.length;
+    document.getElementById('batch-total').textContent = total.toFixed(1);
+  }
+  
+  document.getElementById('add-batch-line').addEventListener('click', addBatchLine);
+  
+  document.getElementById('batch-cancel').addEventListener('click', () => {
+    modal.innerHTML = '';
+  });
+  
+  document.getElementById('batch-modal-overlay').addEventListener('click', (e) => {
+    if (e.target.id === 'batch-modal-overlay') {
+      modal.innerHTML = '';
+    }
+  });
+  
+  document.getElementById('batch-submit').addEventListener('click', async () => {
+    try {
+      const date = document.getElementById('batch-date').value;
+      const trs = document.querySelectorAll('#batch-tbody tr');
+      const entries = [];
+      
+      trs.forEach((tr, idx) => {
+        const project_id = tr.querySelector('.batch-project').value;
+        const task = tr.querySelector('.batch-task').value;
+        const hours = tr.querySelector('.batch-hours').value;
+        const remark = tr.querySelector('.batch-remark').value;
+        
+        if (!project_id || !task || !hours) {
+          throw new Error(`第 ${idx + 1} 行缺少必填字段`);
+        }
+        
+        entries.push({ project_id, task, hours, remark });
+      });
+      
+      if (entries.length === 0) {
+        throw new Error('请至少添加一条工时记录');
+      }
+      
+      const result = await apiRequest('/timesheets/batch', {
+        method: 'POST',
+        body: { entries, date }
+      });
+      
+      showToast(`批量提交成功，共 ${result.count} 条`, 'success');
+      modal.innerHTML = '';
+      renderTimesheet();
+    } catch (err) {
+      document.getElementById('batch-modal-error').innerHTML = `<div class="alert alert-error">${err.message}</div>`;
+    }
+  });
+  
+  addBatchLine();
+}
+
+function showCopyModal() {
+  const today = document.getElementById('filter-date')?.value || new Date().toISOString().split('T')[0];
+  
+  const modal = document.getElementById('copy-modal');
+  modal.innerHTML = `
+    <div class="modal-overlay" id="copy-modal-overlay">
+      <div class="modal">
+        <h3>复制工时</h3>
+        <div id="copy-modal-error"></div>
+        <div class="form-group">
+          <label>源日期 *</label>
+          <input type="date" id="copy-from" required>
+        </div>
+        <div class="form-group">
+          <label>目标日期 *</label>
+          <input type="date" id="copy-to" value="${today}" required>
+        </div>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-secondary" id="copy-cancel">取消</button>
+          <button type="button" class="btn btn-primary" id="copy-submit">复制</button>
+        </div>
+      </div>
+    </div>
+  `;
+  
+  document.getElementById('copy-cancel').addEventListener('click', () => {
+    modal.innerHTML = '';
+  });
+  
+  document.getElementById('copy-modal-overlay').addEventListener('click', (e) => {
+    if (e.target.id === 'copy-modal-overlay') {
+      modal.innerHTML = '';
+    }
+  });
+  
+  document.getElementById('copy-submit').addEventListener('click', async () => {
+    try {
+      const fromDate = document.getElementById('copy-from').value;
+      const toDate = document.getElementById('copy-to').value;
+      
+      if (!fromDate || !toDate) {
+        throw new Error('请选择源日期和目标日期');
+      }
+      
+      const result = await apiRequest('/timesheets/copy', {
+        method: 'POST',
+        body: { fromDate, toDate }
+      });
+      
+      showToast(`复制成功，共 ${result.count} 条`, 'success');
+      modal.innerHTML = '';
+      renderTimesheet();
+    } catch (err) {
+      document.getElementById('copy-modal-error').innerHTML = `<div class="alert alert-error">${err.message}</div>`;
     }
   });
 }
@@ -695,12 +950,13 @@ async function renderTimesheetReview() {
               <th>小时数</th>
               <th>备注</th>
               <th>状态</th>
+              <th>审核意见</th>
               <th>操作</th>
             </tr>
           </thead>
           <tbody id="review-tbody">
             ${timesheets.length === 0 ? 
-              '<tr><td colspan="8" class="empty-state">暂无记录</td></tr>' :
+              '<tr><td colspan="9" class="empty-state">暂无记录</td></tr>' :
               timesheets.map(entry => `
                 <tr>
                   <td>${entry.date}</td>
@@ -710,6 +966,7 @@ async function renderTimesheetReview() {
                   <td>${entry.hours}h</td>
                   <td>${escapeHtml(entry.remark || '-')}</td>
                   <td><span class="status-badge ${getStatusClass(entry.status)}">${getStatusText(entry.status)}</span></td>
+                  <td>${entry.review_comment ? escapeHtml(entry.review_comment) : '-'}</td>
                   <td>
                     <div class="action-buttons">
                       ${entry.status === 'pending' ? `
@@ -717,7 +974,7 @@ async function renderTimesheetReview() {
                         <button class="btn btn-danger btn-sm reject-btn" data-id="${entry.id}">驳回</button>
                       ` : entry.status === 'approved' ? 
                         '<span style="color: #999; font-size: 12px;">已锁定</span>' :
-                        `<button class="btn btn-warning btn-sm reject-btn" data-id="${entry.id}">重新处理</button>`
+                        '<span style="color: #999; font-size: 12px;">已驳回</span>'
                       }
                     </div>
                   </td>
@@ -727,6 +984,7 @@ async function renderTimesheetReview() {
           </tbody>
         </table>
       </div>
+      <div id="review-modal"></div>
     `;
     
     renderLayout(content, 'timesheet-review');
@@ -759,7 +1017,7 @@ async function loadReviewEntries() {
     
     const tbody = document.getElementById('review-tbody');
     tbody.innerHTML = timesheets.length === 0 ? 
-      '<tr><td colspan="8" class="empty-state">暂无记录</td></tr>' :
+      '<tr><td colspan="9" class="empty-state">暂无记录</td></tr>' :
       timesheets.map(entry => `
         <tr>
           <td>${entry.date}</td>
@@ -769,6 +1027,7 @@ async function loadReviewEntries() {
           <td>${entry.hours}h</td>
           <td>${escapeHtml(entry.remark || '-')}</td>
           <td><span class="status-badge ${getStatusClass(entry.status)}">${getStatusText(entry.status)}</span></td>
+          <td>${entry.review_comment ? escapeHtml(entry.review_comment) : '-'}</td>
           <td>
             <div class="action-buttons">
               ${entry.status === 'pending' ? `
@@ -776,7 +1035,7 @@ async function loadReviewEntries() {
                 <button class="btn btn-danger btn-sm reject-btn" data-id="${entry.id}">驳回</button>
               ` : entry.status === 'approved' ? 
                 '<span style="color: #999; font-size: 12px;">已锁定</span>' :
-                `<button class="btn btn-warning btn-sm approve-btn" data-id="${entry.id}">重新处理</button>`
+                '<span style="color: #999; font-size: 12px;">已驳回</span>'
               }
             </div>
           </td>
@@ -789,32 +1048,62 @@ async function loadReviewEntries() {
   }
 }
 
+function showReviewModal(entryId, action) {
+  const isApprove = action === 'approve';
+  const modal = document.getElementById('review-modal');
+  modal.innerHTML = `
+    <div class="modal-overlay" id="review-modal-overlay">
+      <div class="modal">
+        <h3>${isApprove ? '审核通过' : '审核驳回'}</h3>
+        <div id="review-modal-error"></div>
+        <div class="form-group">
+          <label>审核意见</label>
+          <textarea id="review-comment" rows="4" placeholder="请输入审核意见..."></textarea>
+        </div>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-secondary" id="review-cancel">取消</button>
+          <button type="button" class="btn ${isApprove ? 'btn-success' : 'btn-danger'}" id="review-confirm">${isApprove ? '通过' : '驳回'}</button>
+        </div>
+      </div>
+    </div>
+  `;
+  
+  document.getElementById('review-cancel').addEventListener('click', () => {
+    modal.innerHTML = '';
+  });
+  
+  document.getElementById('review-modal-overlay').addEventListener('click', (e) => {
+    if (e.target.id === 'review-modal-overlay') {
+      modal.innerHTML = '';
+    }
+  });
+  
+  document.getElementById('review-confirm').addEventListener('click', async () => {
+    try {
+      const comment = document.getElementById('review-comment').value;
+      await apiRequest(`/timesheets/${entryId}/${action}`, {
+        method: 'POST',
+        body: { comment }
+      });
+      showToast(isApprove ? '审核通过' : '已驳回', 'success');
+      modal.innerHTML = '';
+      loadReviewEntries();
+    } catch (err) {
+      document.getElementById('review-modal-error').innerHTML = `<div class="alert alert-error">${err.message}</div>`;
+    }
+  });
+}
+
 function bindReviewActions() {
   document.querySelectorAll('.approve-btn').forEach(btn => {
-    btn.addEventListener('click', async () => {
-      try {
-        const id = btn.dataset.id;
-        await apiRequest(`/timesheets/${id}/approve`, { method: 'POST' });
-        showToast('审核通过', 'success');
-        loadReviewEntries();
-      } catch (err) {
-        showToast(err.message, 'error');
-      }
+    btn.addEventListener('click', () => {
+      showReviewModal(btn.dataset.id, 'approve');
     });
   });
   
   document.querySelectorAll('.reject-btn').forEach(btn => {
-    btn.addEventListener('click', async () => {
-      if (confirm('确定要驳回这条记录吗？')) {
-        try {
-          const id = btn.dataset.id;
-          await apiRequest(`/timesheets/${id}/reject`, { method: 'POST' });
-          showToast('已驳回', 'success');
-          loadReviewEntries();
-        } catch (err) {
-          showToast(err.message, 'error');
-        }
-      }
+    btn.addEventListener('click', () => {
+      showReviewModal(btn.dataset.id, 'reject');
     });
   });
 }
@@ -833,6 +1122,10 @@ async function renderStatsProject() {
     
     const content = `
       <div class="card">
+        <div class="section-title">
+          <h3>项目成本统计</h3>
+          <button class="btn btn-secondary btn-sm" id="export-csv-btn">导出 CSV</button>
+        </div>
         <div class="filter-bar">
           <div class="form-group">
             <label>项目</label>
@@ -889,6 +1182,7 @@ async function renderStatsProject() {
     renderLayout(content, 'stats-project');
     
     document.getElementById('filter-btn').addEventListener('click', loadProjectStats);
+    document.getElementById('export-csv-btn').addEventListener('click', exportProjectCsv);
     bindDetailActions();
     
   } catch (err) {
@@ -896,16 +1190,21 @@ async function renderStatsProject() {
   }
 }
 
-async function loadProjectStats() {
-  const project_id = document.getElementById('filter-project').value;
-  const startDate = document.getElementById('filter-start').value;
-  const endDate = document.getElementById('filter-end').value;
+function getFilterParams() {
+  const project_id = document.getElementById('filter-project')?.value;
+  const startDate = document.getElementById('filter-start')?.value;
+  const endDate = document.getElementById('filter-end')?.value;
   
   let params = [];
   if (project_id) params.push(`project_id=${project_id}`);
   if (startDate) params.push(`startDate=${startDate}`);
   if (endDate) params.push(`endDate=${endDate}`);
   
+  return params;
+}
+
+async function loadProjectStats() {
+  const params = getFilterParams();
   const url = '/stats/by-project' + (params.length ? '?' + params.join('&') : '');
   
   try {
@@ -925,6 +1224,16 @@ async function loadProjectStats() {
       `).join('');
     
     bindDetailActions();
+  } catch (err) {
+    showToast(err.message, 'error');
+  }
+}
+
+async function exportProjectCsv() {
+  try {
+    const params = getFilterParams();
+    const url = API_BASE + '/stats/export/by-project.csv' + (params.length ? '?' + params.join('&') : '');
+    window.location.href = url;
   } catch (err) {
     showToast(err.message, 'error');
   }
@@ -1003,6 +1312,10 @@ async function renderStatsMember() {
     
     const content = `
       <div class="card">
+        <div class="section-title">
+          <h3>成员工时统计</h3>
+          <button class="btn btn-secondary btn-sm" id="export-csv-btn">导出 CSV</button>
+        </div>
         <div class="filter-bar">
           <div class="form-group">
             <label>开始日期</label>
@@ -1048,6 +1361,7 @@ async function renderStatsMember() {
     renderLayout(content, 'stats-member');
     
     document.getElementById('filter-btn').addEventListener('click', loadMemberStats);
+    document.getElementById('export-csv-btn').addEventListener('click', exportMemberCsv);
     
   } catch (err) {
     showToast(err.message, 'error');
@@ -1076,6 +1390,344 @@ async function loadMemberStats() {
           <td>${stat.entry_count}</td>
           <td>${stat.total_hours.toFixed(1)}h</td>
           <td class="text-danger"><strong>${formatMoney(stat.total_cost)}</strong></td>
+        </tr>
+      `).join('');
+  } catch (err) {
+    showToast(err.message, 'error');
+  }
+}
+
+async function exportMemberCsv() {
+  try {
+    const startDate = document.getElementById('filter-start').value;
+    const endDate = document.getElementById('filter-end').value;
+    
+    let params = [];
+    if (startDate) params.push(`startDate=${startDate}`);
+    if (endDate) params.push(`endDate=${endDate}`);
+    
+    const url = API_BASE + '/stats/export/by-member.csv' + (params.length ? '?' + params.join('&') : '');
+    window.location.href = url;
+  } catch (err) {
+    showToast(err.message, 'error');
+  }
+}
+
+async function renderStatsTask() {
+  renderLayout('<div class="empty-state">加载中...</div>', 'stats-task');
+  
+  try {
+    await loadProjects();
+    
+    const now = new Date();
+    const firstDay = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split('T')[0];
+    const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0).toISOString().split('T')[0];
+    
+    const data = await apiRequest(`/stats/by-task?startDate=${firstDay}&endDate=${lastDay}`);
+    
+    const content = `
+      <div class="card">
+        <h3>任务类型统计</h3>
+        <div class="filter-bar">
+          <div class="form-group">
+            <label>项目</label>
+            <select id="filter-project">
+              <option value="">全部项目</option>
+              ${projects.map(p => `<option value="${p.id}">${escapeHtml(p.name)}</option>`).join('')}
+            </select>
+          </div>
+          <div class="form-group">
+            <label>开始日期</label>
+            <input type="date" id="filter-start" value="${firstDay}">
+          </div>
+          <div class="form-group">
+            <label>结束日期</label>
+            <input type="date" id="filter-end" value="${lastDay}">
+          </div>
+          <div class="form-group">
+            <button class="btn btn-primary" id="filter-btn">统计</button>
+          </div>
+        </div>
+        
+        <table>
+          <thead>
+            <tr>
+              <th>任务类型</th>
+              <th>记录数</th>
+              <th>总工时</th>
+              <th>总成本</th>
+            </tr>
+          </thead>
+          <tbody id="stats-tbody">
+            ${data.stats.length === 0 ? 
+              '<tr><td colspan="4" class="empty-state">暂无数据</td></tr>' :
+              data.stats.map(stat => `
+                <tr>
+                  <td>${escapeHtml(stat.task_name)}</td>
+                  <td>${stat.entry_count}</td>
+                  <td>${stat.total_hours.toFixed(1)}h</td>
+                  <td class="text-danger"><strong>${formatMoney(stat.total_cost)}</strong></td>
+                </tr>
+              `).join('')
+            }
+          </tbody>
+        </table>
+      </div>
+    `;
+    
+    renderLayout(content, 'stats-task');
+    
+    document.getElementById('filter-btn').addEventListener('click', loadTaskStats);
+    
+  } catch (err) {
+    showToast(err.message, 'error');
+  }
+}
+
+async function loadTaskStats() {
+  const project_id = document.getElementById('filter-project').value;
+  const startDate = document.getElementById('filter-start').value;
+  const endDate = document.getElementById('filter-end').value;
+  
+  let params = [];
+  if (project_id) params.push(`project_id=${project_id}`);
+  if (startDate) params.push(`startDate=${startDate}`);
+  if (endDate) params.push(`endDate=${endDate}`);
+  
+  const url = '/stats/by-task' + (params.length ? '?' + params.join('&') : '');
+  
+  try {
+    const data = await apiRequest(url);
+    const tbody = document.getElementById('stats-tbody');
+    tbody.innerHTML = data.stats.length === 0 ? 
+      '<tr><td colspan="4" class="empty-state">暂无数据</td></tr>' :
+      data.stats.map(stat => `
+        <tr>
+          <td>${escapeHtml(stat.task_name)}</td>
+          <td>${stat.entry_count}</td>
+          <td>${stat.total_hours.toFixed(1)}h</td>
+          <td class="text-danger"><strong>${formatMoney(stat.total_cost)}</strong></td>
+        </tr>
+      `).join('');
+  } catch (err) {
+    showToast(err.message, 'error');
+  }
+}
+
+async function renderStatsUtilization() {
+  renderLayout('<div class="empty-state">加载中...</div>', 'stats-utilization');
+  
+  try {
+    const now = new Date();
+    const firstDay = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split('T')[0];
+    const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0).toISOString().split('T')[0];
+    
+    const data = await apiRequest(`/stats/utilization?startDate=${firstDay}&endDate=${lastDay}`);
+    
+    const content = `
+      <div class="card">
+        <h3>成员利用率统计</h3>
+        <div style="margin-bottom: 15px; color: #666;">
+          统计周期内工作日: <strong>${data.weekdays}</strong> 天，标准工时: <strong>${data.standard_total_hours}</strong> 小时 (每天 8 小时)
+        </div>
+        <div class="filter-bar">
+          <div class="form-group">
+            <label>开始日期</label>
+            <input type="date" id="filter-start" value="${firstDay}">
+          </div>
+          <div class="form-group">
+            <label>结束日期</label>
+            <input type="date" id="filter-end" value="${lastDay}">
+          </div>
+          <div class="form-group">
+            <button class="btn btn-primary" id="filter-btn">统计</button>
+          </div>
+        </div>
+        
+        <table>
+          <thead>
+            <tr>
+              <th>成员名称</th>
+              <th>已审核工时</th>
+              <th>标准工时</th>
+              <th>利用率</th>
+            </tr>
+          </thead>
+          <tbody id="stats-tbody">
+            ${data.stats.length === 0 ? 
+              '<tr><td colspan="4" class="empty-state">暂无数据</td></tr>' :
+              data.stats.map(stat => `
+                <tr>
+                  <td>${escapeHtml(stat.user_name)}</td>
+                  <td>${stat.approved_hours.toFixed(1)}h</td>
+                  <td>${stat.standard_hours}h</td>
+                  <td>
+                    <div style="display: flex; align-items: center; gap: 10px;">
+                      <div style="flex: 1; height: 8px; background: #e0e0e0; border-radius: 4px; overflow: hidden;">
+                        <div style="height: 100%; width: ${Math.min(stat.utilization_rate, 100)}%; background: ${stat.utilization_rate > 100 ? '#e74c3c' : stat.utilization_rate > 80 ? '#27ae60' : '#f39c12'};"></div>
+                      </div>
+                      <span style="min-width: 60px; text-align: right;">${stat.utilization_rate.toFixed(1)}%</span>
+                    </div>
+                  </td>
+                </tr>
+              `).join('')
+            }
+          </tbody>
+        </table>
+      </div>
+    `;
+    
+    renderLayout(content, 'stats-utilization');
+    
+    document.getElementById('filter-btn').addEventListener('click', loadUtilizationStats);
+    
+  } catch (err) {
+    showToast(err.message, 'error');
+  }
+}
+
+async function loadUtilizationStats() {
+  const startDate = document.getElementById('filter-start').value;
+  const endDate = document.getElementById('filter-end').value;
+  
+  let params = [];
+  if (startDate) params.push(`startDate=${startDate}`);
+  if (endDate) params.push(`endDate=${endDate}`);
+  
+  const url = '/stats/utilization' + (params.length ? '?' + params.join('&') : '');
+  
+  try {
+    const data = await apiRequest(url);
+    const tbody = document.getElementById('stats-tbody');
+    
+    tbody.innerHTML = data.stats.length === 0 ? 
+      '<tr><td colspan="4" class="empty-state">暂无数据</td></tr>' :
+      data.stats.map(stat => `
+        <tr>
+          <td>${escapeHtml(stat.user_name)}</td>
+          <td>${stat.approved_hours.toFixed(1)}h</td>
+          <td>${stat.standard_hours}h</td>
+          <td>
+            <div style="display: flex; align-items: center; gap: 10px;">
+              <div style="flex: 1; height: 8px; background: #e0e0e0; border-radius: 4px; overflow: hidden;">
+                <div style="height: 100%; width: ${Math.min(stat.utilization_rate, 100)}%; background: ${stat.utilization_rate > 100 ? '#e74c3c' : stat.utilization_rate > 80 ? '#27ae60' : '#f39c12'};"></div>
+              </div>
+              <span style="min-width: 60px; text-align: right;">${stat.utilization_rate.toFixed(1)}%</span>
+            </div>
+          </td>
+        </tr>
+      `).join('');
+  } catch (err) {
+    showToast(err.message, 'error');
+  }
+}
+
+async function renderStatsPending() {
+  renderLayout('<div class="empty-state">加载中...</div>', 'stats-pending');
+  
+  try {
+    await loadProjects();
+    
+    const now = new Date();
+    const firstDay = new Date(now.getFullYear(), now.getMonth() - 1, 1).toISOString().split('T')[0];
+    const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0).toISOString().split('T')[0];
+    
+    const data = await apiRequest(`/stats/pending?startDate=${firstDay}&endDate=${lastDay}`);
+    
+    const content = `
+      <div class="card">
+        <div class="section-title">
+          <h3>未审核工时列表</h3>
+          <span style="color: #666;">共 ${data.count} 条，合计 ${data.total_hours.toFixed(1)} 小时</span>
+        </div>
+        <div class="filter-bar">
+          <div class="form-group">
+            <label>项目</label>
+            <select id="filter-project">
+              <option value="">全部项目</option>
+              ${projects.map(p => `<option value="${p.id}">${escapeHtml(p.name)}</option>`).join('')}
+            </select>
+          </div>
+          <div class="form-group">
+            <label>开始日期</label>
+            <input type="date" id="filter-start" value="${firstDay}">
+          </div>
+          <div class="form-group">
+            <label>结束日期</label>
+            <input type="date" id="filter-end" value="${lastDay}">
+          </div>
+          <div class="form-group">
+            <button class="btn btn-primary" id="filter-btn">查询</button>
+          </div>
+        </div>
+        
+        <table>
+          <thead>
+            <tr>
+              <th>日期</th>
+              <th>成员</th>
+              <th>项目</th>
+              <th>任务</th>
+              <th>小时数</th>
+              <th>备注</th>
+              <th>状态</th>
+            </tr>
+          </thead>
+          <tbody id="pending-tbody">
+            ${data.entries.length === 0 ? 
+              '<tr><td colspan="7" class="empty-state">暂无待审核记录</td></tr>' :
+              data.entries.map(entry => `
+                <tr>
+                  <td>${entry.date}</td>
+                  <td>${escapeHtml(entry.user_name)}</td>
+                  <td>${escapeHtml(entry.project_name)}</td>
+                  <td>${escapeHtml(entry.task)}</td>
+                  <td>${entry.hours}h</td>
+                  <td>${escapeHtml(entry.remark || '-')}</td>
+                  <td><span class="status-badge status-pending">待审核</span></td>
+                </tr>
+              `).join('')
+            }
+          </tbody>
+        </table>
+      </div>
+    `;
+    
+    renderLayout(content, 'stats-pending');
+    
+    document.getElementById('filter-btn').addEventListener('click', loadPendingList);
+    
+  } catch (err) {
+    showToast(err.message, 'error');
+  }
+}
+
+async function loadPendingList() {
+  const project_id = document.getElementById('filter-project').value;
+  const startDate = document.getElementById('filter-start').value;
+  const endDate = document.getElementById('filter-end').value;
+  
+  let params = [];
+  if (project_id) params.push(`project_id=${project_id}`);
+  if (startDate) params.push(`startDate=${startDate}`);
+  if (endDate) params.push(`endDate=${endDate}`);
+  
+  const url = '/stats/pending' + (params.length ? '?' + params.join('&') : '');
+  
+  try {
+    const data = await apiRequest(url);
+    const tbody = document.getElementById('pending-tbody');
+    tbody.innerHTML = data.entries.length === 0 ? 
+      '<tr><td colspan="7" class="empty-state">暂无待审核记录</td></tr>' :
+      data.entries.map(entry => `
+        <tr>
+          <td>${entry.date}</td>
+          <td>${escapeHtml(entry.user_name)}</td>
+          <td>${escapeHtml(entry.project_name)}</td>
+          <td>${escapeHtml(entry.task)}</td>
+          <td>${entry.hours}h</td>
+          <td>${escapeHtml(entry.remark || '-')}</td>
+          <td><span class="status-badge status-pending">待审核</span></td>
         </tr>
       `).join('');
   } catch (err) {
